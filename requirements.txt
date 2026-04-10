@@ -1,0 +1,9 @@
+# ── Core ─────────────────────────────────────────────────────────────────────
+anthropic>=0.28.0          # Claude API client
+PyGithub>=2.3.0            # GitHub REST API (posting PR comments)
+httpx>=0.27.0              # Async HTTP for Black Duck REST calls
+boto3>=1.34.0              # AWS Pricing API + CloudWatch
+PyYAML>=6.0.1              # Kubernetes manifest parsing
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0       # Load .env for local development

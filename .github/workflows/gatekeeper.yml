@@ -1,0 +1,74 @@
+name: GateKeeper — PR Security & Cost Analysis
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gatekeeper:
+    name: Run GateKeeper Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history needed for diff
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Infracost CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/infracost/infracost/master/scripts/install.sh | sh
+          infracost --version
+
+      - name: Authenticate Infracost
+        run: infracost auth login --api-key ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Run GateKeeper pipeline
+        env:
+          # GitHub context
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_FULL_NAME: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
+          # Black Duck
+          BD_API_URL: ${{ secrets.BD_API_URL }}
+          BD_API_TOKEN: ${{ secrets.BD_API_TOKEN }}
+
+          # Anthropic
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # AWS
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+
+        run: python src/main.py
+
+      - name: Upload GateKeeper report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatekeeper-report
+          path: gatekeeper_report.json
+          retention-days: 14
