@@ -37,13 +37,6 @@ jobs:
       - name: Authenticate Infracost
         run: infracost auth login --api-key ${{ secrets.INFRACOST_API_KEY }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
       - name: Run GateKeeper pipeline
         env:
           # GitHub context
@@ -57,10 +50,12 @@ jobs:
           BD_API_URL: ${{ secrets.BD_API_URL }}
           BD_API_TOKEN: ${{ secrets.BD_API_TOKEN }}
 
-          # Anthropic
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # LiteLLM
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
 
-          # AWS
+          # Infracost + region
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
 
         run: python src/main.py

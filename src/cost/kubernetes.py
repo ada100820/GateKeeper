@@ -1,35 +1,39 @@
 """
 KubernetesCostAnalyzer — extracts CPU/memory resource requests & limits from
-Kubernetes manifests and estimates monthly cost delta using the AWS Pricing API
-for the ap-south-1 region (Karpenter-managed node assumption).
+Kubernetes manifests and estimates monthly cost delta using the Infracost
+Cloud Pricing API (no AWS credentials required).
 """
 
 from __future__ import annotations
 
+import json as _json
 import os
 from pathlib import Path
 from typing import Any
 
-import boto3
+import httpx
 import yaml
 
 
 # Default region — overridable via env var
 _AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
 
-# Karpenter node assumption: on-demand Linux, general-purpose (m5.xlarge baseline)
-# The analyzer will price at per-vCPU and per-GB rates derived from the instance family.
-_PRICING_REGION = "us-east-1"  # Pricing API is global, always queried from us-east-1
 _HOURS_PER_MONTH = 730
+_INFRACOST_PRICING_URL = "https://pricing.api.infracost.io/graphql"
 
 # Fallback rates (USD/hour) if Pricing API call fails
 _FALLBACK_CPU_RATE_PER_VCPU_HOUR = 0.048   # ~m5 on-demand vCPU cost
 _FALLBACK_MEM_RATE_PER_GB_HOUR = 0.006     # ~m5 on-demand memory cost
 
+# Instance spec used to derive per-vCPU / per-GB rates
+_BASELINE_INSTANCE = "m5.xlarge"
+_BASELINE_VCPUS = 4
+_BASELINE_MEM_GB = 16
+
 
 class KubernetesCostAnalyzer:
-    def __init__(self) -> None:
-        self._pricing = boto3.client("pricing", region_name=_PRICING_REGION)
+    def __init__(self, infracost_api_key: str) -> None:
+        self._infracost_api_key = infracost_api_key
         self._cpu_rate, self._mem_rate = self._fetch_rates()
 
     # ------------------------------------------------------------------
@@ -74,40 +78,63 @@ class KubernetesCostAnalyzer:
         }
 
     # ------------------------------------------------------------------
-    # AWS Pricing API
+    # Infracost Cloud Pricing API
     # ------------------------------------------------------------------
 
     def _fetch_rates(self) -> tuple[float, float]:
-        """Fetch on-demand vCPU and memory rates for m5.xlarge in the target region."""
-        try:
-            response = self._pricing.get_products(
-                ServiceCode="AmazonEC2",
-                Filters=[
-                    {"Type": "TERM_MATCH", "Field": "instanceType", "Value": "m5.xlarge"},
-                    {"Type": "TERM_MATCH", "Field": "location", "Value": _region_to_pricing_name(_AWS_REGION)},
-                    {"Type": "TERM_MATCH", "Field": "operatingSystem", "Value": "Linux"},
-                    {"Type": "TERM_MATCH", "Field": "tenancy", "Value": "Shared"},
-                    {"Type": "TERM_MATCH", "Field": "preInstalledSw", "Value": "NA"},
-                    {"Type": "TERM_MATCH", "Field": "capacitystatus", "Value": "Used"},
+        """Fetch on-demand vCPU and memory rates via the Infracost Cloud Pricing API."""
+        query = """
+        query($filter: ProductFilter!) {
+          products(filter: $filter) {
+            prices(filter: {purchaseOption: "on_demand"}) {
+              USD
+            }
+          }
+        }
+        """
+        variables = {
+            "filter": {
+                "vendorName": "aws",
+                "service": "AmazonEC2",
+                "productFamily": "Compute Instance",
+                "region": _AWS_REGION,
+                "attributeFilters": [
+                    {"key": "instanceType", "value": _BASELINE_INSTANCE},
+                    {"key": "operatingSystem", "value": "Linux"},
+                    {"key": "tenancy", "value": "Shared"},
+                    {"key": "preInstalledSw", "value": "NA"},
+                    {"key": "capacitystatus", "value": "Used"},
                 ],
-                MaxResults=1,
-            )
-            import json as _json
-            if not response["PriceList"]:
-                raise ValueError("Empty price list")
-            price_item = _json.loads(response["PriceList"][0])
-            on_demand = price_item["terms"]["OnDemand"]
-            term = next(iter(on_demand.values()))
-            price_dim = next(iter(term["priceDimensions"].values()))
-            hourly_price = float(price_dim["pricePerUnit"]["USD"])
+            }
+        }
 
-            # m5.xlarge: 4 vCPU, 16 GB — derive per-unit rates
-            cpu_rate = hourly_price / 4
-            mem_rate = hourly_price / 16
-            print(f"[K8sCost] Fetched m5.xlarge rate: ${hourly_price}/hr → CPU ${cpu_rate:.4f}/vCPU/hr, Mem ${mem_rate:.4f}/GB/hr")
+        try:
+            resp = httpx.post(
+                _INFRACOST_PRICING_URL,
+                json={"query": query, "variables": variables},
+                headers={
+                    "X-Api-Key": self._infracost_api_key,
+                    "Content-Type": "application/json",
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            products = data.get("data", {}).get("products", [])
+            if not products or not products[0].get("prices"):
+                raise ValueError("No pricing data returned from Infracost")
+
+            hourly_price = float(products[0]["prices"][0]["USD"])
+            cpu_rate = hourly_price / _BASELINE_VCPUS
+            mem_rate = hourly_price / _BASELINE_MEM_GB
+            print(
+                f"[K8sCost] Infracost → {_BASELINE_INSTANCE} @ {_AWS_REGION}: "
+                f"${hourly_price}/hr → CPU ${cpu_rate:.4f}/vCPU/hr, Mem ${mem_rate:.4f}/GB/hr"
+            )
             return cpu_rate, mem_rate
         except Exception as exc:
-            print(f"[K8sCost] Pricing API failed ({exc}), using fallback rates.")
+            print(f"[K8sCost] Infracost Pricing API failed ({exc}), using fallback rates.")
             return _FALLBACK_CPU_RATE_PER_VCPU_HOUR, _FALLBACK_MEM_RATE_PER_GB_HOUR
 
 
@@ -210,20 +237,6 @@ def _parse_memory_gb(value: str) -> float:
     except ValueError:
         return 0.0
 
-
-def _region_to_pricing_name(region: str) -> str:
-    _MAP = {
-        "ap-south-1": "Asia Pacific (Mumbai)",
-        "us-east-1": "US East (N. Virginia)",
-        "us-east-2": "US East (Ohio)",
-        "us-west-1": "US West (N. California)",
-        "us-west-2": "US West (Oregon)",
-        "eu-west-1": "Europe (Ireland)",
-        "eu-central-1": "Europe (Frankfurt)",
-        "ap-southeast-1": "Asia Pacific (Singapore)",
-        "ap-northeast-1": "Asia Pacific (Tokyo)",
-    }
-    return _MAP.get(region, "US East (N. Virginia)")
 
 
 def _build_summary(workloads: list[dict], monthly_delta: float) -> str:

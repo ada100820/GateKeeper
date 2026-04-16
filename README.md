@@ -40,9 +40,9 @@ PR opened / updated
 |------|---------|---------|
 | Python | 3.11+ | Core runtime |
 | Infracost CLI | latest | Terraform cost estimation |
-| AWS credentials | — | Pricing API read + CloudWatch |
+| Infracost API key | — | K8s + Terraform cost estimation |
 | Black Duck Hub | — | OSS scan endpoint |
-| Anthropic API key | — | Claude AI synthesis |
+| LiteLLM API key | — | Claude AI synthesis (via LiteLLM) |
 
 ---
 
@@ -79,10 +79,9 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 |-------------|-------------|
 | `BD_API_URL` | Black Duck Hub URL |
 | `BD_API_TOKEN` | Black Duck API token |
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `AWS_ACCESS_KEY_ID` | AWS access key |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key |
-| `AWS_REGION` | AWS region (default: `ap-south-1`) |
+| `LITELLM_API_KEY` | LiteLLM API key |
+| `LITELLM_BASE_URL` | LiteLLM proxy URL (optional) |
+| `AWS_REGION` | AWS region for K8s pricing (default: `ap-south-1`) |
 | `INFRACOST_API_KEY` | Infracost API key |
 
 `GITHUB_TOKEN` is provided automatically by GitHub Actions.

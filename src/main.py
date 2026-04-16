@@ -35,7 +35,9 @@ async def main() -> None:
 
     bd_url = _require_env("BD_API_URL")
     bd_token = _require_env("BD_API_TOKEN")
-    anthropic_key = _require_env("ANTHROPIC_API_KEY")
+    litellm_key = _require_env("LITELLM_API_KEY")
+    litellm_base = os.environ.get("LITELLM_BASE_URL")  # optional
+    infracost_key = _require_env("INFRACOST_API_KEY")
 
     print(f"[GateKeeper] Analysing PR #{pr_number} in {repo_full_name} ({base_sha[:7]}..{head_sha[:7]})")
 
@@ -55,13 +57,13 @@ async def main() -> None:
 
     # --- 3. Cost analysis (async, parallel with BD) ---
     cost_task = asyncio.create_task(
-        _run_cost_analysis(k8s_files, terraform_files)
+        _run_cost_analysis(k8s_files, terraform_files, infracost_api_key=infracost_key)
     )
 
     bd_findings, cost_findings = await asyncio.gather(bd_task, cost_task)
 
     # --- 4. AI synthesis ---
-    synthesizer = AISynthesizer(api_key=anthropic_key)
+    synthesizer = AISynthesizer(api_key=litellm_key, api_base=litellm_base)
     verdict = synthesizer.synthesize(bd_findings=bd_findings, cost_findings=cost_findings)
     print(f"[GateKeeper] Verdict: {verdict['verdict']}")
 
@@ -95,11 +97,11 @@ async def _run_blackduck(bd_url: str, bd_token: str, manifest_files: list[str]) 
     return findings
 
 
-async def _run_cost_analysis(k8s_files: list[str], terraform_files: list[str]) -> dict:
+async def _run_cost_analysis(k8s_files: list[str], terraform_files: list[str], *, infracost_api_key: str) -> dict:
     results: dict = {"kubernetes": None, "terraform": None}
 
     if k8s_files:
-        k8s_analyzer = KubernetesCostAnalyzer()
+        k8s_analyzer = KubernetesCostAnalyzer(infracost_api_key=infracost_api_key)
         results["kubernetes"] = k8s_analyzer.analyze(k8s_files)
     else:
         print("[Cost] No Kubernetes files changed.")

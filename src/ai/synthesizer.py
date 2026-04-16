@@ -1,23 +1,24 @@
 """
-AISynthesizer — sends Black Duck + cost findings to Claude and returns
-a structured verdict dict.
+AISynthesizer — sends Black Duck + cost findings to Claude (via LiteLLM)
+and returns a structured verdict dict.
 """
 
 from __future__ import annotations
 
 import json
 
-import anthropic
+import litellm
 
 from .prompts import SYSTEM_PROMPT, build_user_prompt
 
-_MODEL = "claude-sonnet-4-6"
+_MODEL = "anthropic/claude-sonnet-4-6"
 _MAX_TOKENS = 4096
 
 
 class AISynthesizer:
-    def __init__(self, api_key: str) -> None:
-        self._client = anthropic.Anthropic(api_key=api_key)
+    def __init__(self, api_key: str, api_base: str | None = None) -> None:
+        self._api_key = api_key
+        self._api_base = api_base
 
     def synthesize(self, bd_findings: dict, cost_findings: dict) -> dict:
         """
@@ -28,17 +29,21 @@ class AISynthesizer:
         print(f"[AI] Sending findings to {_MODEL} for synthesis …")
 
         try:
-            message = self._client.messages.create(
+            response = litellm.completion(
                 model=_MODEL,
                 max_tokens=_MAX_TOKENS,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                api_key=self._api_key,
+                api_base=self._api_base,
             )
-        except anthropic.APIError as exc:
-            print(f"[AI] Claude API error: {exc}")
+        except Exception as exc:
+            print(f"[AI] LiteLLM API error: {exc}")
             return _fallback_verdict(bd_findings, cost_findings, error=str(exc))
 
-        raw_text = message.content[0].text.strip()
+        raw_text = response.choices[0].message.content.strip()
         print(f"[AI] Received response ({len(raw_text)} chars)")
 
         return _parse_verdict(raw_text, bd_findings, cost_findings)
